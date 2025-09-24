@@ -14,7 +14,6 @@ app.use(cors());
 app.use(bodyParser.json({ limit: '2mb' }));
 
 const PORT = process.env.PORT || 3000;
-const HEADLESS = String(process.env.HEADLESS || 'true') === 'true';
 const USER_DATA_DIR = process.env.USER_DATA_DIR || './user-data';
 const NOTE_TEMPLATE = process.env.NOTE_TEMPLATE || '';
 const MAX_PER_RUN = Number(process.env.MAX_PER_RUN || 30);
@@ -40,13 +39,14 @@ async function launchBrowser() {
   if (browserInstance) return browserInstance;
 
   browserInstance = await puppeteer.launch({
-    headless: HEADLESS,
+    headless: true, // force headless mode
     userDataDir: USER_DATA_DIR,
     args: [
       '--no-sandbox',
       '--disable-setuid-sandbox',
+      '--disable-gpu',
+      '--disable-dev-shm-usage',
       '--disable-blink-features=AutomationControlled',
-      '--disable-dev-shm-usage'
     ],
     defaultViewport: null,
   });
@@ -56,6 +56,10 @@ async function launchBrowser() {
 
 async function tryConnect(page, { profileUrl, note }) {
   await page.goto(profileUrl, { waitUntil: 'networkidle2', timeout: 60000 });
+
+  // DEBUG LOG before using $x
+  console.log('Is page valid?', !!page, typeof page);
+  console.log('page keys:', Object.keys(page || {}));
 
   // Check if already connected
   const alreadyConnected = await page.$x(
@@ -175,5 +179,5 @@ app.post('/sendConnection', async (req, res) => {
 
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 LinkedIn bot running at http://0.0.0.0:${PORT}`);
-  console.log(`   HEADLESS=${HEADLESS}  USER_DATA_DIR=${USER_DATA_DIR}`);
+  console.log(`   HEADLESS=true  USER_DATA_DIR=${USER_DATA_DIR}`);
 });

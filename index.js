@@ -13,77 +13,60 @@ const app = express();
 app.use(cors());
 app.use(bodyParser.json({ limit: '2mb' }));
 
-// ====== Config ======
 const PORT = process.env.PORT || 3000;
-const HEADLESS = process.env.HEADLESS === 'true' || true; // force true by default
+const HEADLESS = String(process.env.HEADLESS || 'true') === 'true';
 const USER_DATA_DIR = process.env.USER_DATA_DIR || './user-data';
 const NOTE_TEMPLATE = process.env.NOTE_TEMPLATE || '';
 const MAX_PER_RUN = Number(process.env.MAX_PER_RUN || 30);
-const CHROME_PATH = process.env.CHROME_PATH || null;
 
 let cookies = [];
 try {
   const c = require('./cookies.json');
   if (Array.isArray(c) && c.length) cookies = c;
 } catch (e) {
-  console.log('No cookies.json found, using userDataDir login session.');
+  // no cookies.json
 }
 
 let sentCount = 0;
 let busy = false;
+let browserInstance = null;
 
-// Helpers
 function randomInt(min, max) {
   return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// ============= Puppeteer Launcher =============
-let browserInstance = null;
-
 async function launchBrowser() {
   if (browserInstance) return browserInstance;
 
-  const launchOptions = {
-    headless: 'new', // modern headless mode
+  browserInstance = await puppeteer.launch({
+    headless: HEADLESS,
     userDataDir: USER_DATA_DIR,
     args: [
       '--no-sandbox',
       '--disable-setuid-sandbox',
-      '--disable-dev-shm-usage',
       '--disable-blink-features=AutomationControlled',
-      '--disable-gpu',
-      '--no-zygote',
-      '--single-process'
+      '--disable-dev-shm-usage'
     ],
     defaultViewport: null,
-  };
+  });
 
-  if (CHROME_PATH) {
-    launchOptions.executablePath = CHROME_PATH;
-    console.log(`Using Chrome at ${CHROME_PATH}`);
-  }
-
-  browserInstance = await puppeteer.launch(launchOptions);
   return browserInstance;
 }
 
-// ============= LinkedIn Logic =============
 async function tryConnect(page, { profileUrl, note }) {
   await page.goto(profileUrl, { waitUntil: 'networkidle2', timeout: 60000 });
 
+  // Check if already connected
   const alreadyConnected = await page.$x(
     `//button[contains(normalize-space(.),"Message")] | //span[contains(., "Pending")]`
   );
   if (alreadyConnected.length) return { success: false, status: 'already_connected_or_pending' };
 
-  let connectBtn = await page.$('button[aria-label*="Connect"]');
-  if (!connectBtn) {
-    const [btn] = await page.$x(
-      `//button[normalize-space(.)="Connect"] | //span[normalize-space(.)="Connect"]/ancestor::button[1]`
-    );
-    if (btn) connectBtn = btn;
-  }
+  // Find Connect button
+  let connectBtn =
+    await page.$('button[aria-label*="Connect"]') ||
+    (await page.$x(`//button[normalize-space(.)="Connect"] | //span[normalize-space(.)="Connect"]/ancestor::button[1]`))[0];
 
   if (!connectBtn) {
     const [more] = await page.$x(
@@ -101,43 +84,40 @@ async function tryConnect(page, { profileUrl, note }) {
 
   if (!connectBtn) return { success: false, status: 'no_connect_button' };
 
-  try {
-    await connectBtn.click();
-  } catch (e) {
-    try { await page.evaluate(el => el.click(), connectBtn); } catch (e2) {}
-  }
-
+  await connectBtn.click().catch(() =>
+    page.evaluate((el) => el.click(), connectBtn)
+  );
   await sleep(randomInt(800, 1600));
 
+  // Check weekly limit
   const limitWarning = await page.$x(
-    `//*[contains(., "weekly invitation limit")] | //*[contains(., "You’ve reached the weekly")] | //*[contains(., "You have reached the weekly invite limit")]`
+    `//*[contains(., "weekly invitation limit")] | //*[contains(., "You’ve reached the weekly")]`
   );
   if (limitWarning.length) return { success: false, status: 'weekly_limit_reached' };
 
-  if (note && note.trim()) {
+  // Add note if available
+  if (note?.trim()) {
     const [addNoteBtn] = await page.$x(
-      `//button[contains(., "Add a note")] | //button[contains(., "Add note")] | //button[contains(., "Add personal message")]`
+      `//button[contains(., "Add a note")] | //button[contains(., "Add note")]`
     );
     if (addNoteBtn) {
       await addNoteBtn.click();
       await sleep(600);
-      const textarea = await page.$('textarea[name="message"]') || await page.$('textarea');
-      if (textarea) {
-        await textarea.type(note, { delay: randomInt(20, 60) });
-      }
-      const [sendBtn] = await page.$x(
-        `//button[contains(., "Send now")] | //button[contains(., "Send")]`
-      );
+
+      const textarea = (await page.$('textarea[name="message"]')) || (await page.$('textarea'));
+      if (textarea) await textarea.type(note, { delay: randomInt(20, 60) });
+
+      const [sendBtn] = await page.$x(`//button[contains(., "Send now")] | //button[contains(., "Send")]`);
       if (sendBtn) {
         await sendBtn.click();
         await sleep(1000);
         return { success: true, status: 'sent_with_note' };
-      } else {
-        return { success: false, status: 'send_button_not_found_after_note' };
       }
+      return { success: false, status: 'send_button_not_found_after_note' };
     }
   }
 
+  // Send without note
   const [sendNow] = await page.$x(
     `//button[contains(., "Send now")] | //button[normalize-space(.)="Send"] | //button[contains(., "Send invitation")]`
   );
@@ -150,8 +130,8 @@ async function tryConnect(page, { profileUrl, note }) {
   return { success: false, status: 'send_button_not_found' };
 }
 
-// ============= API Routes =============
-app.get('/', (req, res) => res.send('✅ LinkedIn Puppeteer service — use POST /sendConnection'));
+// Routes
+app.get('/', (req, res) => res.send('✅ LinkedIn Puppeteer service running'));
 app.get('/health', (req, res) => res.json({ ok: true, sentCount, busy }));
 
 app.post('/sendConnection', async (req, res) => {
@@ -162,11 +142,7 @@ app.post('/sendConnection', async (req, res) => {
 
   const { profileUrl, note } = req.body || {};
   if (!profileUrl || !/^https?:\/\/(www\.)?linkedin\.com\/in\//.test(profileUrl)) {
-    return res.status(400).json({
-      success: false,
-      status: 'bad_request',
-      message: 'profileUrl required and must be a linkedin.com/in URL'
-    });
+    return res.status(400).json({ success: false, status: 'bad_request', message: 'Valid LinkedIn profile URL required' });
   }
 
   busy = true;
@@ -174,34 +150,30 @@ app.post('/sendConnection', async (req, res) => {
   try {
     const browser = await launchBrowser();
     page = await browser.newPage();
+
     await page.setUserAgent(
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36'
     );
 
-    if (cookies && cookies.length) {
-      try { await page.setCookie(...cookies); } catch (e) { console.warn('Could not set cookies:', e.message || e); }
+    if (cookies.length) {
+      await page.setCookie(...cookies).catch((e) => console.warn('Cookie set failed:', e.message));
     }
 
     await sleep(randomInt(500, 1200));
-
-    const result = await tryConnect(page, {
-      profileUrl,
-      note: note?.trim() ? note : NOTE_TEMPLATE
-    });
+    const result = await tryConnect(page, { profileUrl, note: note?.trim() || NOTE_TEMPLATE });
     if (result.success) sentCount += 1;
 
     res.json({ ...result, profileUrl });
   } catch (err) {
-    console.error('Error in /sendConnection:', err.stack || err);
+    console.error('❌ Error in /sendConnection:', err.stack || err);
     res.status(500).json({ success: false, status: 'exception', error: String(err) });
   } finally {
     busy = false;
-    try { if (page) await page.close(); } catch (e) {}
+    if (page) await page.close().catch(() => {});
   }
 });
 
-// Start server
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`🚀 LinkedIn bot running on http://0.0.0.0:${PORT}`);
+  console.log(`🚀 LinkedIn bot running at http://0.0.0.0:${PORT}`);
   console.log(`   HEADLESS=${HEADLESS}  USER_DATA_DIR=${USER_DATA_DIR}`);
 });

@@ -26,6 +26,7 @@ let browserInstance = null;
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 const randomInt = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min;
 
+// Launch Puppeteer browser
 async function launchBrowser() {
   if (browserInstance) return browserInstance;
 
@@ -38,6 +39,7 @@ async function launchBrowser() {
       '--disable-gpu',
       '--disable-dev-shm-usage',
       '--disable-blink-features=AutomationControlled',
+      '--window-size=1920,1080'
     ],
     defaultViewport: null,
   });
@@ -45,10 +47,15 @@ async function launchBrowser() {
   return browserInstance;
 }
 
+// Login LinkedIn
 async function loginLinkedIn(page) {
   await page.goto('https://www.linkedin.com/login', { waitUntil: 'networkidle2' });
 
-  // Enter username and password
+  if (!(await page.$('input#username')) || !(await page.$('input#password'))) {
+    console.log('⚠ Already logged in or login inputs not found');
+    return;
+  }
+
   await page.type('input#username', USERNAME, { delay: randomInt(50, 100) });
   await page.type('input#password', PASSWORD, { delay: randomInt(50, 100) });
 
@@ -58,11 +65,14 @@ async function loginLinkedIn(page) {
   console.log('✅ Logged into LinkedIn successfully');
 }
 
+// Send connection request
 async function sendConnection(page, profileUrl, note) {
   await page.goto(profileUrl, { waitUntil: 'networkidle2' });
   console.log('Navigated to profile:', profileUrl);
 
-  // Check for already connected
+  const messageText = String(note || NOTE_TEMPLATE);
+
+  // Already connected check
   const alreadyConnected = await page.$x(
     `//button[contains(normalize-space(.),"Message")] | //span[contains(., "Pending")]`
   );
@@ -89,13 +99,15 @@ async function sendConnection(page, profileUrl, note) {
   await sleep(randomInt(800, 1600));
 
   // Add note if provided
-  if (note?.trim()) {
+  if (messageText.length > 0) {
     const [addNoteBtn] = await page.$x(`//button[contains(., "Add a note")] | //button[contains(., "Add note")]`);
     if (addNoteBtn) {
       await addNoteBtn.click();
       await sleep(600);
+
       const textarea = (await page.$('textarea[name="message"]')) || (await page.$('textarea'));
-      if (textarea) await textarea.type(note, { delay: randomInt(20, 60) });
+      if (textarea) await textarea.type(messageText, { delay: randomInt(20, 60) });
+
       const [sendBtn] = await page.$x(`//button[contains(., "Send now")] | //button[contains(., "Send")]`);
       if (sendBtn) {
         await sendBtn.click();
@@ -125,7 +137,9 @@ app.post('/sendConnection', async (req, res) => {
   if (sentCount >= MAX_PER_RUN) return res.status(429).json({ success: false, status: 'max_per_run_reached' });
   if (busy) return res.status(429).json({ success: false, status: 'service_busy' });
 
-  const { profileUrl, note } = req.body || {};
+  const profileUrl = String(req.body?.profileUrl || '');
+  const noteText = String(req.body?.note || NOTE_TEMPLATE);
+
   if (!profileUrl || !/^https?:\/\/(www\.)?linkedin\.com\/in\//.test(profileUrl)) {
     return res.status(400).json({ success: false, status: 'bad_request', message: 'Valid LinkedIn profile URL required' });
   }
@@ -135,18 +149,17 @@ app.post('/sendConnection', async (req, res) => {
   try {
     const browser = await launchBrowser();
     page = await browser.newPage();
-
     await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36');
 
-    // Login if not logged in
-    if (!(await page.$('header'))) {
+    // Login if login form is present
+    if (await page.$('input#username') && await page.$('input#password')) {
       await loginLinkedIn(page);
     }
 
-    const result = await sendConnection(page, profileUrl, note?.trim() || NOTE_TEMPLATE);
+    const result = await sendConnection(page, profileUrl, noteText);
     if (result.success) sentCount += 1;
 
-    res.json({ ...result, profileUrl });
+    res.json({ ...result, profileUrl, timestamp: new Date().toISOString() });
   } catch (err) {
     console.error('❌ Error in /sendConnection:', err.stack || err);
     res.status(500).json({ success: false, status: 'exception', error: String(err) });

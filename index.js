@@ -5,7 +5,6 @@ const bodyParser = require('body-parser');
 const cors = require('cors');
 const puppeteer = require('puppeteer-extra');
 const StealthPlugin = require('puppeteer-extra-plugin-stealth');
-const fs = require('fs');
 
 puppeteer.use(StealthPlugin());
 
@@ -14,32 +13,24 @@ app.use(cors());
 app.use(bodyParser.json({ limit: '2mb' }));
 
 const PORT = process.env.PORT || 3000;
-const USER_DATA_DIR = process.env.USER_DATA_DIR || './user-data';
+const USERNAME = process.env.LINKEDIN_USERNAME;
+const PASSWORD = process.env.LINKEDIN_PASSWORD;
 const NOTE_TEMPLATE = process.env.NOTE_TEMPLATE || '';
+const USER_DATA_DIR = process.env.USER_DATA_DIR || './user-data';
 const MAX_PER_RUN = Number(process.env.MAX_PER_RUN || 30);
-
-let cookies = [];
-try {
-  const c = require('./cookies.json');
-  if (Array.isArray(c) && c.length) cookies = c;
-} catch (e) {
-  // no cookies.json
-}
 
 let sentCount = 0;
 let busy = false;
 let browserInstance = null;
 
-function randomInt(min, max) {
-  return Math.floor(Math.random() * (max - min + 1)) + min;
-}
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+const randomInt = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min;
 
 async function launchBrowser() {
   if (browserInstance) return browserInstance;
 
   browserInstance = await puppeteer.launch({
-    headless: true, // force headless mode
+    headless: true,
     userDataDir: USER_DATA_DIR,
     args: [
       '--no-sandbox',
@@ -54,14 +45,24 @@ async function launchBrowser() {
   return browserInstance;
 }
 
-async function tryConnect(page, { profileUrl, note }) {
-  await page.goto(profileUrl, { waitUntil: 'networkidle2', timeout: 60000 });
+async function loginLinkedIn(page) {
+  await page.goto('https://www.linkedin.com/login', { waitUntil: 'networkidle2' });
 
-  // DEBUG LOG before using $x
-  console.log('Is page valid?', !!page, typeof page);
-  console.log('page keys:', Object.keys(page || {}));
+  // Enter username and password
+  await page.type('input#username', USERNAME, { delay: randomInt(50, 100) });
+  await page.type('input#password', PASSWORD, { delay: randomInt(50, 100) });
 
-  // Check if already connected
+  await page.click('button[type="submit"]');
+  await page.waitForNavigation({ waitUntil: 'networkidle2' });
+
+  console.log('✅ Logged into LinkedIn successfully');
+}
+
+async function sendConnection(page, profileUrl, note) {
+  await page.goto(profileUrl, { waitUntil: 'networkidle2' });
+  console.log('Navigated to profile:', profileUrl);
+
+  // Check for already connected
   const alreadyConnected = await page.$x(
     `//button[contains(normalize-space(.),"Message")] | //span[contains(., "Pending")]`
   );
@@ -73,44 +74,28 @@ async function tryConnect(page, { profileUrl, note }) {
     (await page.$x(`//button[normalize-space(.)="Connect"] | //span[normalize-space(.)="Connect"]/ancestor::button[1]`))[0];
 
   if (!connectBtn) {
-    const [more] = await page.$x(
-      `//button[normalize-space(.)="More"] | //button[contains(., "More actions")]`
-    );
+    const [more] = await page.$x(`//button[normalize-space(.)="More"] | //button[contains(., "More actions")]`);
     if (more) {
       await more.click();
       await sleep(800);
-      const [connectInMenu] = await page.$x(
-        `//div[contains(@role,"menu")]//span[normalize-space(.)="Connect"]`
-      );
+      const [connectInMenu] = await page.$x(`//div[contains(@role,"menu")]//span[normalize-space(.)="Connect"]`);
       if (connectInMenu) connectBtn = connectInMenu;
     }
   }
 
   if (!connectBtn) return { success: false, status: 'no_connect_button' };
 
-  await connectBtn.click().catch(() =>
-    page.evaluate((el) => el.click(), connectBtn)
-  );
+  await connectBtn.click().catch(() => page.evaluate(el => el.click(), connectBtn));
   await sleep(randomInt(800, 1600));
 
-  // Check weekly limit
-  const limitWarning = await page.$x(
-    `//*[contains(., "weekly invitation limit")] | //*[contains(., "You’ve reached the weekly")]`
-  );
-  if (limitWarning.length) return { success: false, status: 'weekly_limit_reached' };
-
-  // Add note if available
+  // Add note if provided
   if (note?.trim()) {
-    const [addNoteBtn] = await page.$x(
-      `//button[contains(., "Add a note")] | //button[contains(., "Add note")]`
-    );
+    const [addNoteBtn] = await page.$x(`//button[contains(., "Add a note")] | //button[contains(., "Add note")]`);
     if (addNoteBtn) {
       await addNoteBtn.click();
       await sleep(600);
-
       const textarea = (await page.$('textarea[name="message"]')) || (await page.$('textarea'));
       if (textarea) await textarea.type(note, { delay: randomInt(20, 60) });
-
       const [sendBtn] = await page.$x(`//button[contains(., "Send now")] | //button[contains(., "Send")]`);
       if (sendBtn) {
         await sendBtn.click();
@@ -122,9 +107,7 @@ async function tryConnect(page, { profileUrl, note }) {
   }
 
   // Send without note
-  const [sendNow] = await page.$x(
-    `//button[contains(., "Send now")] | //button[normalize-space(.)="Send"] | //button[contains(., "Send invitation")]`
-  );
+  const [sendNow] = await page.$x(`//button[contains(., "Send now")] | //button[normalize-space(.)="Send"] | //button[contains(., "Send invitation")]`);
   if (sendNow) {
     await sendNow.click();
     await sleep(800);
@@ -139,9 +122,7 @@ app.get('/', (req, res) => res.send('✅ LinkedIn Puppeteer service running'));
 app.get('/health', (req, res) => res.json({ ok: true, sentCount, busy }));
 
 app.post('/sendConnection', async (req, res) => {
-  if (sentCount >= MAX_PER_RUN) {
-    return res.status(429).json({ success: false, status: 'max_per_run_reached' });
-  }
+  if (sentCount >= MAX_PER_RUN) return res.status(429).json({ success: false, status: 'max_per_run_reached' });
   if (busy) return res.status(429).json({ success: false, status: 'service_busy' });
 
   const { profileUrl, note } = req.body || {};
@@ -155,16 +136,14 @@ app.post('/sendConnection', async (req, res) => {
     const browser = await launchBrowser();
     page = await browser.newPage();
 
-    await page.setUserAgent(
-      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36'
-    );
+    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36');
 
-    if (cookies.length) {
-      await page.setCookie(...cookies).catch((e) => console.warn('Cookie set failed:', e.message));
+    // Login if not logged in
+    if (!(await page.$('header'))) {
+      await loginLinkedIn(page);
     }
 
-    await sleep(randomInt(500, 1200));
-    const result = await tryConnect(page, { profileUrl, note: note?.trim() || NOTE_TEMPLATE });
+    const result = await sendConnection(page, profileUrl, note?.trim() || NOTE_TEMPLATE);
     if (result.success) sentCount += 1;
 
     res.json({ ...result, profileUrl });
@@ -179,5 +158,4 @@ app.post('/sendConnection', async (req, res) => {
 
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 LinkedIn bot running at http://0.0.0.0:${PORT}`);
-  console.log(`   HEADLESS=true  USER_DATA_DIR=${USER_DATA_DIR}`);
 });

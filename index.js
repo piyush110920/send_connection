@@ -38,6 +38,7 @@ async function launchBrowser() {
             '--disable-setuid-sandbox',
             '--disable-gpu',
             '--disable-dev-shm-usage',
+            '--single-process',
             '--disable-blink-features=AutomationControlled',
         ],
         defaultViewport: null,
@@ -53,11 +54,13 @@ async function launchBrowser() {
 // Login function
 async function loginLinkedIn(page) {
     console.log('🔑 Logging into LinkedIn...');
-    await page.goto('https://www.linkedin.com/login', { waitUntil: 'networkidle2' });
+    // Added timeout to prevent navigation errors on a slow connection
+    await page.goto('https://www.linkedin.com/login', { waitUntil: 'networkidle2', timeout: 60000 });
     await page.type('input#username', USERNAME, { delay: randomInt(50, 100) });
     await page.type('input#password', PASSWORD, { delay: randomInt(50, 100) });
     await page.click('button[type="submit"]');
-    await page.waitForNavigation({ waitUntil: 'networkidle2' });
+    // Added timeout to prevent navigation errors after a successful login
+    await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 60000 });
     console.log('✅ Logged in successfully');
 }
 
@@ -68,7 +71,8 @@ async function sendConnection(page, profileUrl, note) {
     // Ensure 'note' is a string before it's used
     const noteText = typeof note === 'string' ? note.trim() : '';
 
-    await page.goto(profileUrl, { waitUntil: 'networkidle2' });
+    // Added timeout to prevent navigation errors
+    await page.goto(profileUrl, { waitUntil: 'networkidle2', timeout: 60000 });
     console.log('📄 Navigated to profile:', profileUrl);
 
     // Check if already connected

@@ -15,7 +15,6 @@ app.use(bodyParser.json({ limit: '2mb' }));
 const PORT = process.env.PORT || 3000;
 const USERNAME = process.env.LINKEDIN_USERNAME;
 const PASSWORD = process.env.LINKEDIN_PASSWORD;
-const NOTE_TEMPLATE = process.env.NOTE_TEMPLATE || '';
 const USER_DATA_DIR = process.env.USER_DATA_DIR || './user-data';
 const MAX_PER_RUN = Number(process.env.MAX_PER_RUN || 30);
 
@@ -62,7 +61,7 @@ async function loginLinkedIn(page) {
 }
 
 // Send connection request
-async function sendConnection(page, profileUrl, note) {
+async function sendConnection(page, profileUrl) {
   if (!page || typeof page.$x !== 'function') throw new Error('Invalid Page object');
 
   await page.goto(profileUrl, { waitUntil: 'networkidle2' });
@@ -100,25 +99,7 @@ async function sendConnection(page, profileUrl, note) {
   await connectBtn.click().catch(() => page.evaluate(el => el.click(), connectBtn));
   await sleep(randomInt(800, 1600));
 
-  // Add note if provided
-  if (note?.trim()) {
-    const [addNoteBtn] = await page.$x(`//button[contains(., "Add a note")] | //button[contains(., "Add note")]`);
-    if (addNoteBtn) {
-      await addNoteBtn.click();
-      await sleep(600);
-      const textarea = (await page.$('textarea[name="message"]')) || (await page.$('textarea'));
-      if (textarea) await textarea.type(note, { delay: randomInt(20, 60) });
-      const [sendBtn] = await page.$x(`//button[contains(., "Send now")] | //button[contains(., "Send")]`);
-      if (sendBtn) {
-        await sendBtn.click();
-        await sleep(1000);
-        return { success: true, status: 'sent_with_note' };
-      }
-      return { success: false, status: 'send_button_not_found_after_note' };
-    }
-  }
-
-  // Send without note
+  // Send invitation without a note
   const [sendNow] = await page.$x(`//button[contains(., "Send now")] | //button[normalize-space(.)="Send"] | //button[contains(., "Send invitation")]`);
   if (sendNow) {
     await sendNow.click();
@@ -137,7 +118,7 @@ app.post('/sendConnection', async (req, res) => {
   if (sentCount >= MAX_PER_RUN) return res.status(429).json({ success: false, status: 'max_per_run_reached' });
   if (busy) return res.status(429).json({ success: false, status: 'service_busy' });
 
-  const { profileUrl, note } = req.body || {};
+  const { profileUrl } = req.body || {};
   if (!profileUrl || !/^https?:\/\/(www\.)?linkedin\.com\/in\//.test(profileUrl)) {
     return res.status(400).json({ success: false, status: 'bad_request', message: 'Valid LinkedIn profile URL required' });
   }
@@ -153,7 +134,7 @@ app.post('/sendConnection', async (req, res) => {
     const header = await page.$('header');
     if (!header) await loginLinkedIn(page);
 
-    const result = await sendConnection(page, profileUrl, note?.trim() || NOTE_TEMPLATE);
+    const result = await sendConnection(page, profileUrl);
     if (result.success) sentCount += 1;
 
     res.json({ ...result, profileUrl });

@@ -54,12 +54,10 @@ async function launchBrowser() {
 // Login function
 async function loginLinkedIn(page) {
     console.log('🔑 Logging into LinkedIn...');
-    // Added timeout to prevent navigation errors on a slow connection
     await page.goto('https://www.linkedin.com/login', { waitUntil: 'networkidle2', timeout: 60000 });
     await page.type('input#username', USERNAME, { delay: randomInt(50, 100) });
     await page.type('input#password', PASSWORD, { delay: randomInt(50, 100) });
     await page.click('button[type="submit"]');
-    // Added timeout to prevent navigation errors after a successful login
     await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 60000 });
     console.log('✅ Logged in successfully');
 }
@@ -68,10 +66,8 @@ async function loginLinkedIn(page) {
 async function sendConnection(page, profileUrl, note) {
     if (!page || typeof page.$x !== 'function') throw new Error('Invalid Page object');
 
-    // Ensure 'note' is a string before it's used
     const noteText = typeof note === 'string' ? note.trim() : '';
 
-    // Added timeout to prevent navigation errors
     await page.goto(profileUrl, { waitUntil: 'networkidle2', timeout: 60000 });
     console.log('📄 Navigated to profile:', profileUrl);
 
@@ -167,6 +163,10 @@ app.post('/sendConnection', async (req, res) => {
     } catch (err) {
         console.error('❌ Error in /sendConnection:', err.stack || err);
         res.status(500).json({ success: false, status: 'exception', error: String(err) });
+        
+        // Key change: In case of an error, set browserInstance to null
+        // so the next request starts a new, clean browser.
+        browserInstance = null;
     } finally {
         busy = false;
         if (page) await page.close().catch(() => {});

@@ -27,87 +27,87 @@ const randomInt = (min, max) => Math.floor(Math.random() * (max - min + 1)) + mi
 
 // Launch Puppeteer safely
 async function launchBrowser() {
-  if (browserInstance) return browserInstance;
+    if (browserInstance) return browserInstance;
 
-  browserInstance = await puppeteer.launch({
-    headless: true,
-    userDataDir: USER_DATA_DIR,
-    args: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-gpu',
-      '--disable-dev-shm-usage',
-      '--disable-blink-features=AutomationControlled',
-    ],
-    defaultViewport: null,
-  });
+    browserInstance = await puppeteer.launch({
+        headless: true,
+        userDataDir: USER_DATA_DIR,
+        args: [
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--disable-gpu',
+            '--disable-dev-shm-usage',
+            '--disable-blink-features=AutomationControlled',
+        ],
+        defaultViewport: null,
+    });
 
-  if (!browserInstance.newPage) {
-    throw new Error('Browser launch failed, newPage not available');
-  }
+    if (!browserInstance.newPage) {
+        throw new Error('Browser launch failed, newPage not available');
+    }
 
-  return browserInstance;
+    return browserInstance;
 }
 
 // Login function
 async function loginLinkedIn(page) {
-  console.log('🔑 Logging into LinkedIn...');
-  await page.goto('https://www.linkedin.com/login', { waitUntil: 'networkidle2' });
-  await page.type('input#username', USERNAME, { delay: randomInt(50, 100) });
-  await page.type('input#password', PASSWORD, { delay: randomInt(50, 100) });
-  await page.click('button[type="submit"]');
-  await page.waitForNavigation({ waitUntil: 'networkidle2' });
-  console.log('✅ Logged in successfully');
+    console.log('🔑 Logging into LinkedIn...');
+    await page.goto('https://www.linkedin.com/login', { waitUntil: 'networkidle2' });
+    await page.type('input#username', USERNAME, { delay: randomInt(50, 100) });
+    await page.type('input#password', PASSWORD, { delay: randomInt(50, 100) });
+    await page.click('button[type="submit"]');
+    await page.waitForNavigation({ waitUntil: 'networkidle2' });
+    console.log('✅ Logged in successfully');
 }
 
-// Send connection request
+// Send connection request (Corrected version without note)
 async function sendConnection(page, profileUrl) {
-  if (!page || typeof page.$x !== 'function') throw new Error('Invalid Page object');
+    if (!page || typeof page.$x !== 'function') throw new Error('Invalid Page object');
 
-  await page.goto(profileUrl, { waitUntil: 'networkidle2' });
-  console.log('📄 Navigated to profile:', profileUrl);
+    await page.goto(profileUrl, { waitUntil: 'networkidle2' });
+    console.log('📄 Navigated to profile:', profileUrl);
 
-  // Check if already connected
-  let alreadyConnected = [];
-  try {
-    alreadyConnected = await page.$x(
-      `//button[contains(normalize-space(.),"Message")] | //span[contains(., "Pending")]`
-    );
-  } catch (err) {
-    console.error('❌ $x failed:', err);
-    return { success: false, status: 'xpath_failed' };
-  }
-  if (alreadyConnected.length) return { success: false, status: 'already_connected_or_pending' };
-
-  // Find Connect button
-  let connectBtn =
-    (await page.$('button[aria-label*="Connect"]')) ||
-    (await page.$x(`//button[normalize-space(.)="Connect"] | //span[normalize-space(.)="Connect"]/ancestor::button[1]`))[0];
-
-  if (!connectBtn) {
-    const [more] = await page.$x(`//button[normalize-space(.)="More"] | //button[contains(., "More actions")]`);
-    if (more) {
-      await more.click();
-      await sleep(800);
-      const [connectInMenu] = await page.$x(`//div[contains(@role,"menu")]//span[normalize-space(.)="Connect"]`);
-      if (connectInMenu) connectBtn = connectInMenu;
+    // Check if already connected
+    let alreadyConnected = [];
+    try {
+        alreadyConnected = await page.$x(
+            `//button[contains(normalize-space(.),"Message")] | //span[contains(., "Pending")]`
+        );
+    } catch (err) {
+        console.error('❌ $x failed:', err);
+        return { success: false, status: 'xpath_failed' };
     }
-  }
+    if (alreadyConnected.length) return { success: false, status: 'already_connected_or_pending' };
 
-  if (!connectBtn) return { success: false, status: 'no_connect_button' };
+    // Find Connect button
+    let connectBtn =
+        (await page.$('button[aria-label*="Connect"]')) ||
+        (await page.$x(`//button[normalize-space(.)="Connect"] | //span[normalize-space(.)="Connect"]/ancestor::button[1]`))[0];
 
-  await connectBtn.click().catch(() => page.evaluate(el => el.click(), connectBtn));
-  await sleep(randomInt(800, 1600));
+    if (!connectBtn) {
+        const [more] = await page.$x(`//button[normalize-space(.)="More"] | //button[contains(., "More actions")]`);
+        if (more) {
+            await more.click();
+            await sleep(800);
+            const [connectInMenu] = await page.$x(`//div[contains(@role,"menu")]//span[normalize-space(.)="Connect"]`);
+            if (connectInMenu) connectBtn = connectInMenu;
+        }
+    }
 
-  // Send invitation without a note
-  const [sendNow] = await page.$x(`//button[contains(., "Send now")] | //button[normalize-space(.)="Send"] | //button[contains(., "Send invitation")]`);
-  if (sendNow) {
-    await sendNow.click();
-    await sleep(800);
-    return { success: true, status: 'sent_without_note' };
-  }
+    if (!connectBtn) return { success: false, status: 'no_connect_button' };
 
-  return { success: false, status: 'send_button_not_found' };
+    await connectBtn.click().catch(() => page.evaluate(el => el.click(), connectBtn));
+    await sleep(randomInt(800, 1600));
+
+    // Send invitation without a note
+    const [sendNow] = await page.$x(`//button[contains(., "Send now")] | //button[normalize-space(.)="Send"] | //button[contains(., "Send invitation")]`);
+    if (sendNow) {
+        await sendNow.click();
+        await sleep(800);
+        return { success: true, status: 'sent_without_note' };
+    }
+
+    return { success: false, status: 'send_button_not_found' };
 }
 
 // Routes
@@ -115,38 +115,38 @@ app.get('/', (req, res) => res.send('✅ LinkedIn Puppeteer service running'));
 app.get('/health', (req, res) => res.json({ ok: true, sentCount, busy }));
 
 app.post('/sendConnection', async (req, res) => {
-  if (sentCount >= MAX_PER_RUN) return res.status(429).json({ success: false, status: 'max_per_run_reached' });
-  if (busy) return res.status(429).json({ success: false, status: 'service_busy' });
+    if (sentCount >= MAX_PER_RUN) return res.status(429).json({ success: false, status: 'max_per_run_reached' });
+    if (busy) return res.status(429).json({ success: false, status: 'service_busy' });
 
-  const { profileUrl } = req.body || {};
-  if (!profileUrl || !/^https?:\/\/(www\.)?linkedin\.com\/in\//.test(profileUrl)) {
-    return res.status(400).json({ success: false, status: 'bad_request', message: 'Valid LinkedIn profile URL required' });
-  }
+    const { profileUrl } = req.body || {};
+    if (!profileUrl || !/^https?:\/\/(www\.)?linkedin\.com\/in\//.test(profileUrl)) {
+        return res.status(400).json({ success: false, status: 'bad_request', message: 'Valid LinkedIn profile URL required' });
+    }
 
-  busy = true;
-  let page;
-  try {
-    const browser = await launchBrowser();
-    page = await browser.newPage();
-    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36');
+    busy = true;
+    let page;
+    try {
+        const browser = await launchBrowser();
+        page = await browser.newPage();
+        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36');
 
-    // Check login
-    const header = await page.$('header');
-    if (!header) await loginLinkedIn(page);
+        // Check login
+        const header = await page.$('header');
+        if (!header) await loginLinkedIn(page);
 
-    const result = await sendConnection(page, profileUrl);
-    if (result.success) sentCount += 1;
+        const result = await sendConnection(page, profileUrl);
+        if (result.success) sentCount += 1;
 
-    res.json({ ...result, profileUrl });
-  } catch (err) {
-    console.error('❌ Error in /sendConnection:', err.stack || err);
-    res.status(500).json({ success: false, status: 'exception', error: String(err) });
-  } finally {
-    busy = false;
-    if (page) await page.close().catch(() => {});
-  }
+        res.json({ ...result, profileUrl });
+    } catch (err) {
+        console.error('❌ Error in /sendConnection:', err.stack || err);
+        res.status(500).json({ success: false, status: 'exception', error: String(err) });
+    } finally {
+        busy = false;
+        if (page) await page.close().catch(() => {});
+    }
 });
 
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`🚀 LinkedIn bot running at http://0.0.0.0:${PORT}`);
+    console.log(`🚀 LinkedIn bot running at http://0.0.0.0:${PORT}`);
 });
